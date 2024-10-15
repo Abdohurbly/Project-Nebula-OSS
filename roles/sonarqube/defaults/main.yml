@@ -1,0 +1,10 @@
+---
+sonar_web_host: "0.0.0.0"
+sonar_web_port: "9000"
+sonar_jdbc_username: "sonarqube"
+sonar_jdbc_password: "sonarqube"
+sonar_jdbc_url: "jdbc:postgresql://localhost/sonarqube"
+sonarqube_db_name: sonarqube
+sonarqube_db_user: sonarqube
+sonarqube_db_password: sonarqube
+sonarqube_version: "10.7.0.96327"

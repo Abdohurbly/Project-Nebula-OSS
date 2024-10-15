@@ -68,3 +68,16 @@
   shell: "nohup /opt/prometheus/prometheus --config.file=/opt/prometheus/prometheus.yml > /dev/null 2>&1 &"
   when: systemd_check.rc != 0
   become: yes
+
+- name: Check if UFW is installed
+  command: dpkg-query -W -f='${Status}' ufw
+  register: ufw_check
+  failed_when: false
+  changed_when: false
+
+- name: Allow Prometheus port through UFW
+  ufw:
+    rule: allow
+    port: "9090"
+  become: yes
+  when: ufw_check.rc == 0 and ufw_check.stdout.find('install ok installed') != -1

@@ -1,0 +1,7 @@
+---
+- name: Install SonarQube across multiple OS
+  hosts: all
+  become: yes
+
+  roles:
+    - sonarqube

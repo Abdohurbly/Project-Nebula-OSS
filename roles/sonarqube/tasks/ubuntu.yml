@@ -1,0 +1,152 @@
+---
+- name: Install required dependencies
+  apt:
+    name:
+      - openjdk-17-jdk
+      - unzip
+      - curl
+      - postgresql
+      - postgresql-contrib
+      - python3-psycopg2
+    state: present
+    update_cache: yes
+  become: yes
+
+- name: Ensure PostgreSQL is started
+  systemd:
+    name: postgresql
+    state: started
+  become: yes
+
+- name: Ensure Ansible temp directory exists
+  file:
+    path: /var/lib/postgresql/.ansible/tmp
+    state: directory
+    mode: "0700"
+    owner: postgres
+    group: postgres
+  become: yes
+
+- name: Create PostgreSQL database
+  become: yes
+  become_user: postgres
+  postgresql_db:
+    name: "{{ sonarqube_db_name }}"
+    state: present
+
+- name: Create PostgreSQL user
+  become: yes
+  become_user: postgres
+  postgresql_user:
+    name: "{{ sonarqube_db_user }}"
+    password: "{{ sonarqube_db_password }}"
+    role_attr_flags: CREATEDB
+    state: present
+
+- name: Grant privileges to user
+  become: yes
+  become_user: postgres
+  postgresql_privs:
+    type: database
+    database: "{{ sonarqube_db_name }}"
+    roles: "{{ sonarqube_db_user }}"
+    privs: ALL
+
+# NEW TASK: Grant required permissions on public schema to the sonarqube user
+- name: Grant privileges on the public schema to the SonarQube user
+  become: yes
+  become_user: postgres
+  postgresql_query:
+    db: "{{ sonarqube_db_name }}"
+    query: |
+      GRANT ALL ON SCHEMA public TO {{ sonarqube_db_user }};
+      GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO {{ sonarqube_db_user }};
+      GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA public TO {{ sonarqube_db_user }};
+      ALTER SCHEMA public OWNER TO {{ sonarqube_db_user }};
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO {{ sonarqube_db_user }};
+      ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON SEQUENCES TO {{ sonarqube_db_user }};
+
+- name: Add SonarQube user
+  user:
+    name: sonar
+    shell: /bin/bash
+    home: /opt/sonarqube
+    create_home: yes
+  become: yes
+
+- name: Download SonarQube with curl
+  command: curl -L -o /tmp/sonarqube.zip https://binaries.sonarsource.com/Distribution/sonarqube/sonarqube-{{ sonarqube_version }}.zip
+  become: yes
+
+- name: Extract SonarQube
+  unarchive:
+    src: /tmp/sonarqube.zip
+    dest: /opt/
+    remote_src: yes
+    owner: sonar
+    group: sonar
+  become: yes
+
+- name: Check if SonarQube symlink exists
+  stat:
+    path: /opt/sonarqube
+  register: sonarqube_symlink
+  become: yes
+
+- name: Remove existing SonarQube directory if it's not a symlink
+  file:
+    path: /opt/sonarqube
+    state: absent
+  when: sonarqube_symlink.stat.exists and not sonarqube_symlink.stat.islnk
+  become: yes
+
+- name: Create symlink to SonarQube
+  file:
+    src: "/opt/sonarqube-{{ sonarqube_version }}"
+    dest: /opt/sonarqube
+    state: link
+  when: not sonarqube_symlink.stat.exists or not sonarqube_symlink.stat.islnk
+  become: yes
+
+- name: Configure SonarQube
+  template:
+    src: sonar.properties.j2
+    dest: /opt/sonarqube/conf/sonar.properties
+    owner: sonar
+    group: sonar
+    mode: 0644
+  become: yes
+
+- name: Set up SonarQube systemd service
+  template:
+    src: sonarqube.service.j2
+    dest: /etc/systemd/system/sonarqube.service
+    owner: root
+    group: root
+    mode: 0644
+  become: yes
+
+- name: Reload systemd daemon
+  systemd:
+    daemon_reload: yes
+  become: yes
+
+- name: Enable and start SonarQube service
+  systemd:
+    name: sonarqube
+    enabled: yes
+    state: started
+  become: yes
+
+- name: Check if UFW is installed
+  command: dpkg-query -W -f='${Status}' ufw
+  register: ufw_check
+  failed_when: false
+  changed_when: false
+
+- name: Allow SonarQube port through UFW
+  ufw:
+    rule: allow
+    port: "9000"
+  become: yes
+  when: ufw_check.rc == 0 and ufw_check.stdout.find('install ok installed') != -1

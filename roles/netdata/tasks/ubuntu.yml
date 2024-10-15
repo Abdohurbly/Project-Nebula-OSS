@@ -1,6 +1,6 @@
 ---
-- name: Install Python 3 on Amazon Linux
-  yum:
+- name: Install Python 3 on Ubuntu
+  apt:
     name: python3
     state: present
   become: yes
@@ -11,23 +11,241 @@
     creates: /usr/bin/python
   become: yes
 
-- name: Install Netdata on Amazon Linux
-  shell: |
-    bash -c 'bash <(curl -SsL https://my-netdata.io/kickstart.sh) --stable-channel'
+# Stop Netdata if it is running (ignore error if not installed)
+- name: Stop Netdata service if running
+  systemd:
+    name: netdata
+    state: stopped
+    enabled: no
+  become: yes
+  ignore_errors: yes
+  failed_when: false
+
+# Full uninstallation of any previous Netdata installation
+- name: Remove old Netdata package manager installation
+  apt:
+    name: netdata
+    state: absent
+    purge: yes
   become: yes
 
-- name: Ensure Netdata service is started and enabled
+# Remove specific Netdata directories (in case they were missed)
+- name: Remove specific Netdata directories
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/netdata
+    - /opt/netdata
+    - /usr/libexec/netdata
+    - /usr/local/netdata
+    - /var/cache/netdata
+    - /var/lib/netdata
+    - /var/log/netdata
+    - /usr/sbin/netdata
+  become: yes
+
+# Clean up any remaining Netdata user and group
+- name: Remove Netdata user
+  user:
+    name: netdata
+    state: absent
+    remove: yes
+  become: yes
+  ignore_errors: yes
+
+- name: Remove Netdata group
+  group:
+    name: netdata
+    state: absent
+  become: yes
+  ignore_errors: yes
+
+# Install the new version of Netdata
+- name: Install Netdata on Ubuntu using bash explicitly with curl following redirects
+  shell: |
+    bash -c 'bash <(curl -L -Ss https://my-netdata.io/kickstart.sh) --stable-channel --disable-telemetry'
+  become: yes
+  register: netdata_install_result
+
+- name: Display Netdata installation result
+  debug:
+    var: netdata_install_result
+    verbosity: 1
+
+# Check for Netdata configuration in multiple possible locations
+- name: Check for Netdata configuration
+  stat:
+    path: "{{ item }}"
+  loop:
+    - /opt/netdata/etc/netdata/netdata.conf
+    - /etc/netdata/netdata.conf
+    - /usr/lib/netdata/conf.d/netdata.conf
+    - /usr/local/etc/netdata/netdata.conf # Additional path
+    - /usr/etc/netdata/netdata.conf # Additional path
+  register: netdata_conf_check
+
+- name: Set Netdata configuration path
+  set_fact:
+    netdata_conf_path: "{{ netdata_conf_check.results | selectattr('stat.exists', 'equalto', true) | map(attribute='item') | first }}"
+  when: netdata_conf_check.results | selectattr('stat.exists', 'equalto', true) | list | length > 0
+
+# Create default netdata.conf if not found
+- name: Create default netdata.conf if not found
+  copy:
+    dest: /etc/netdata/netdata.conf
+    content: |
+      [global]
+      # Default configuration
+  when: netdata_conf_path is not defined
+  become: yes
+
+# Display the found configuration path
+- name: Display Netdata configuration path
+  debug:
+    var: netdata_conf_path
+    verbosity: 1
+
+- name: Start Netdata service
   systemd:
     name: netdata
     state: started
     enabled: yes
   become: yes
 
-- name: Open port 19999 for Netdata on Amazon Linux
-  firewalld:
-    service: netdata
-    permanent: yes
-    immediate: yes
-    state: enabled
-    zone: public
+# Configure health_alarm_notify.conf and netdata.conf in the new installation
+- name: Check if health_alarm_notify.conf exists
+  stat:
+    path: "{{ netdata_conf_path | dirname }}/health_alarm_notify.conf"
+  register: health_alarm_notify_conf
+
+- name: Create health_alarm_notify.conf if it does not exist
+  copy:
+    dest: "{{ netdata_conf_path | dirname }}/health_alarm_notify.conf"
+    content: |
+      SEND_EMAIL="NO"
+      SEND_SLACK="NO"
+      SEND_DISCORD="NO"
+      SEND_CUSTOM="NO"
+      SEND_WEBHOOK="YES"
+      DEFAULT_RECIPIENT_WEBHOOK="all"
+      WEBHOOK_URL="https://api.thenebu.com/api/webhook/netdata"
+  when: not health_alarm_notify_conf.stat.exists
+  become: yes
+
+- name: Update netdata.conf for enabling health and debugging
+  lineinfile:
+    path: "{{ netdata_conf_path }}"
+    regexp: "^#*health enabled ="
+    line: "health enabled = yes"
+    insertafter: "[global]"
+  become: yes
+
+- name: Add debug and log configuration to netdata.conf
+  blockinfile:
+    path: "{{ netdata_conf_path }}"
+    marker: ""
+    block: |
+      [health]
+          debug = yes
+          enabled = yes
+  become: yes
+
+# Replace alarm-notify.sh and deploy multiple alerts configuration files
+- name: Find alarm-notify.sh
+  find:
+    paths:
+      - /opt/netdata
+      - /usr/libexec/netdata
+    patterns: "alarm-notify.sh"
+    recurse: yes
+  register: alarm_notify_find
+
+- name: Set alarm-notify.sh path
+  set_fact:
+    alarm_notify_path: "{{ alarm_notify_find.files[0].path }}"
+  when: alarm_notify_find.files | length > 0
+
+- name: Replace alarm-notify.sh with new version
+  copy:
+    src: alarm-notify.sh
+    dest: "{{ alarm_notify_path }}"
+    owner: root
+    group: root
+    mode: "0755"
+  become: yes
+  when: alarm_notify_path is defined
+
+- name: Replace placeholder with a variable in alarm-notify.sh (USER_ID)
+  replace:
+    path: "{{ alarm_notify_path }}"
+    regexp: "USER_ID"
+    replace: "{{ USER_ID }}"
+  become: yes
+  when: alarm_notify_path is defined
+
+- name: Replace placeholder with a variable in alarm-notify.sh (CLOUD_NAME)
+  replace:
+    path: "{{ alarm_notify_path }}"
+    regexp: "CLOUD_NAME"
+    replace: "{{ CLOUD_NAME }}"
+  become: yes
+  when: alarm_notify_path is defined
+
+- name: Deploy multiple alerts configuration files
+  copy:
+    dest: "{{ netdata_conf_path | dirname }}/health.d/{{ item }}"
+    content: |
+      alarm: {{ item | regex_replace('_usage.conf', '_usage') }}
+          on: system.{{ item | regex_replace('_usage.conf', '') }}
+          lookup: average -1m percentage
+          calc: $this
+          every: 1m
+          warn: $this > 50  
+          crit: $this > 80 
+          info: {{ item | regex_replace('_usage.conf', ' usage is critically high') }}
+          to: sysadmin
+  loop:
+    - cpu_usage.conf
+    - ram_usage.conf
+    - disk_io.conf
+    - disk_usage.conf
+  become: yes
+
+- name: Restart Netdata to apply configurations
+  systemd:
+    name: netdata
+    state: restarted
+  become: yes
+
+# UFW configuration for Netdata
+- name: Check if UFW is installed
+  command: dpkg-query -W -f='${Status}' ufw
+  register: ufw_check
+  failed_when: false
+  changed_when: false
+
+- name: Allow Netdata port through UFW
+  ufw:
+    rule: allow
+    port: "19999"
+  become: yes
+  when: ufw_check.rc == 0 and ufw_check.stdout.find('install ok installed') != -1
+
+# Execute Nginx script
+- name: Copy nginx.sh to /tmp directory
+  copy:
+    src: nginx.sh
+    dest: /tmp/nginx.sh
+    mode: "0755"
+  become: yes
+
+- name: Execute nginx.sh
+  command: /tmp/nginx.sh
+  become: yes
+
+- name: Remove nginx.sh from /tmp directory
+  file:
+    path: /tmp/nginx.sh
+    state: absent
   become: yes

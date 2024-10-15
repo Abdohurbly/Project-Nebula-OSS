@@ -90,3 +90,16 @@
   debug:
     msg: "Grafana API is accessible and functioning correctly"
   when: grafana_health.status == 200
+
+- name: Check if UFW is installed
+  command: dpkg-query -W -f='${Status}' ufw
+  register: ufw_check
+  failed_when: false
+  changed_when: false
+
+- name: Allow Grafana port through UFW
+  ufw:
+    rule: allow
+    port: "3000"
+  become: yes
+  when: ufw_check.rc == 0 and ufw_check.stdout.find('install ok installed') != -1

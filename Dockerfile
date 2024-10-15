@@ -4,18 +4,23 @@ FROM ubuntu:20.04
 # Set the environment variable for non-interactive apt install
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Update and install necessary packages including Ansible, Python, and dependencies
+# Update and install necessary packages
 RUN apt-get update && \
-    apt-get install -y software-properties-common curl && \
-    apt-add-repository --yes --update ppa:ansible/ansible && \
-    apt-get install -y ansible python3-pip python3-apt sshpass && \
+    apt-get install -y software-properties-common curl python3-pip python3-apt sshpass && \
     apt-get clean
+
+# Ensure python3 is the default for python command
+RUN update-alternatives --install /usr/bin/python python /usr/bin/python3 1
+
+# Install Ansible and necessary dependencies via pip3
+RUN pip3 install --upgrade pip
+RUN pip3 install ansible
 
 # Set the working directory
 WORKDIR /ansible
 
-# Copy your playbooks and roles into the Docker container (optional, if you want your local files inside the container)
+# Copy your playbooks and roles into the Docker container
 COPY . /ansible
 
-# Set the default entry point to bash so you can run commands manually
-ENTRYPOINT ["/bin/bash"]
+# Set the default command to ensure the container stays alive
+CMD [ "tail", "-f", "/dev/null" ]
