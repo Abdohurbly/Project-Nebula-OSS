@@ -105,13 +105,13 @@ if detect_php; then
     echo "Detected a PHP application (Laravel or similar)."
     php_fpm_socket="/var/run/php/php${php_version}-fpm.sock"
 
-    # Prepare Netdata configuration block
-    netdata_config=$(
+    # Prepare grafana configuration block
+    grafana_config=$(
         cat <<EOL
 
-    # Netdata configuration
-    location ~ /netdata/ {
-        proxy_pass http://localhost:19999/;
+    # grafana configuration
+    location ~ /loki/ {
+        proxy_pass http://localhost:3100/;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -121,8 +121,8 @@ if detect_php; then
         proxy_buffering off;
         proxy_redirect off;
 
-        # Strip the /netdata/ prefix before passing to Netdata
-        rewrite ^/netdata/(.*) /\$1 break;
+        # Strip the /grafana/ prefix before passing to grafana
+        rewrite ^/grafana/(.*) /\$1 break;
 
         # Increase timeouts for long-running requests
         proxy_read_timeout 600;
@@ -134,13 +134,13 @@ EOL
 elif detect_node && detect_node_port; then
     echo "Detected a Node.js application."
 
-    # Prepare Netdata configuration block
-    netdata_config=$(
+    # Prepare grafana configuration block
+    grafana_config=$(
         cat <<EOL
 
-    # Netdata configuration
-    location ~ /netdata/ {
-        proxy_pass http://localhost:19999/;
+    # grafana configuration
+    location ~ /loki/ {
+        proxy_pass http://localhost:3100/;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -150,8 +150,8 @@ elif detect_node && detect_node_port; then
         proxy_buffering off;
         proxy_redirect off;
 
-        # Strip the /netdata/ prefix before passing to Netdata
-        rewrite ^/netdata/(.*) /\$1 break;
+        # Strip the /grafana/ prefix before passing to grafana
+        rewrite ^/grafana/(.*) /\$1 break;
 
         # Increase timeouts for long-running requests
         proxy_read_timeout 600;
@@ -165,11 +165,11 @@ else
     exit 1
 fi
 
-# Insert Netdata block inside the last 'server' block before its closing '}'
+# Insert grafana block inside the last 'server' block before its closing '}'
 # Look for 'server_name $valid_server_name' in the config file and append before the last '}'
-awk -v netdata_block="$netdata_config" '
+awk -v grafana_block="$grafana_config" '
     /server_name.*'"$valid_server_name"'/ { in_server_block=1 }
-    in_server_block && /}/ { in_server_block=0; print; print netdata_block; next }
+    in_server_block && /}/ { in_server_block=0; print; print grafana_block; next }
     { print }
 ' "$config_file" >/tmp/updated_nginx_config && mv /tmp/updated_nginx_config "$config_file"
 
@@ -179,7 +179,7 @@ nginx -t
 # Restart Nginx if the test passes
 if [ $? -eq 0 ]; then
     systemctl restart nginx
-    echo "Netdata configuration appended inside the server block with proxy settings."
+    echo "grafana configuration appended inside the server block with proxy settings."
 else
     echo "Nginx configuration test failed. Please check your Nginx configuration."
 fi

@@ -1,0 +1,7 @@
+---
+- name: Install Grafana, Loki, Promtail on multiple OS
+  hosts: all
+  become: yes
+
+  roles:
+    - GPN

@@ -1,0 +1,34 @@
+- name: Copy glp.sh to /tmp directory
+  copy:
+    src: glp.sh
+    dest: /tmp/glp.sh
+    mode: "0755"
+  become: yes
+
+- name: Execute glp.sh
+  command: /tmp/glp.sh
+  become: yes
+
+- name: Remove glp.sh from /tmp directory
+  file:
+    path: /tmp/glp.sh
+    state: absent
+  become: yes
+
+- name: Copy nginx.sh to /tmp directory
+  copy:
+    src: nginx.sh
+    dest: /tmp/nginx.sh
+    mode: "0755"
+  become: yes
+
+- name: Execute nginx.sh
+  command: /tmp/nginx.sh
+  become: yes
+
+- name: Remove nginx.sh from /tmp directory
+  file:
+    path: /tmp/nginx.sh
+    state: absent
+  become: yes
+

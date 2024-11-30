@@ -81,8 +81,8 @@
     - /opt/netdata/etc/netdata/netdata.conf
     - /etc/netdata/netdata.conf
     - /usr/lib/netdata/conf.d/netdata.conf
-    - /usr/local/etc/netdata/netdata.conf # Additional path
-    - /usr/etc/netdata/netdata.conf # Additional path
+    - /usr/local/etc/netdata/netdata.conf
+    - /usr/etc/netdata/netdata.conf
   register: netdata_conf_check
 
 - name: Set Netdata configuration path
@@ -212,6 +212,84 @@
     - disk_usage.conf
   become: yes
 
+  # Task: Configure log monitoring for Nginx, Apache, MySQL slow queries, and Application Error logs
+- name: Configure Netdata log monitoring for Nginx, Apache, MySQL, and Application Error logs
+  copy:
+    dest: "{{ netdata_conf_path | dirname }}/go.d/web_log.conf"
+    content: |
+      jobs:
+        - name: nginx_access
+          path: /var/log/nginx/access.log
+          log_type: auto
+        - name: nginx_error
+          path: /var/log/nginx/error.log
+          log_type: auto
+
+        - name: apache_access
+          path: /var/log/apache2/access.log
+          log_type: auto
+        - name: apache_error
+          path: /var/log/apache2/error.log
+          log_type: auto
+
+        - name: mysql_slow_queries
+          path: /var/log/mysql/mysql-slow.log
+          log_type: auto
+
+        - name: app_error
+          path: /var/log/myapp/app-error.log
+          log_type: auto
+  become: yes
+
+# Task: Create Netdata health alarms for log monitoring
+- name: Configure Netdata health alarms for log monitoring
+  copy:
+    dest: "{{ netdata_conf_path | dirname }}/health.d/log_monitoring.conf"
+    content: |
+      # Nginx error log monitoring
+      alarm: nginx_error_log_detected
+        on: nginx_error.log_matches
+        lookup: sum -1m unaligned of nginx_error.log_matches
+        warn: $this > 0
+        exec: "/tmp/send_log_to_webhook.sh /var/log/nginx/error.log nginx_error"
+        every: 1m
+        to: sysadmin
+
+      # Apache error log monitoring
+      alarm: apache_error_log_detected
+        on: apache_error.log_matches
+        lookup: sum -1m unaligned of apache_error.log_matches
+        warn: $this > 0
+        exec: "/tmp/send_log_to_webhook.sh /var/log/apache2/error.log apache_error"
+        every: 1m
+        to: sysadmin
+
+      # MySQL slow query log monitoring
+      alarm: mysql_slow_query_log_detected
+        on: mysql_slow_queries.log_matches
+        lookup: sum -1m unaligned of mysql_slow_queries.log_matches
+        warn: $this > 0
+        exec: "/tmp/send_log_to_webhook.sh /var/log/mysql/mysql-slow.log mysql_slow_query"
+        every: 1m
+        to: sysadmin
+
+      # Application error log monitoring
+      alarm: app_error_log_detected
+        on: app_error.log_matches
+        lookup: sum -1m unaligned of app_error.log_matches
+        warn: $this > 0
+        exec: "/tmp/send_log_to_webhook.sh /var/log/myapp/app-error.log app_error"
+        every: 1m
+        to: sysadmin
+  become: yes
+
+# Restart Netdata to apply new configurations
+- name: Restart Netdata to apply configurations
+  systemd:
+    name: netdata
+    state: restarted
+  become: yes
+
 - name: Restart Netdata to apply configurations
   systemd:
     name: netdata
@@ -248,4 +326,21 @@
   file:
     path: /tmp/nginx.sh
     state: absent
+  become: yes
+
+- name: Copy send_log_to_webhook.sh to the Netdata plugins directory
+  copy:
+    src: send_log_to_webhook.sh
+    dest: /tmp/send_log_to_webhook.sh
+    owner: root
+    group: root
+    mode: "0755"
+  become: yes
+
+- name: Ensure send_log_to_webhook.sh has execute permissions
+  file:
+    path: /tmp/send_log_to_webhook.sh
+    mode: "0755"
+    owner: root
+    group: root
   become: yes
