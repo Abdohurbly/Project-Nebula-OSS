@@ -36,6 +36,66 @@ download_with_retries() {
   return 1
 }
 
+create_loki_config() {
+  echo "Creating Loki configuration..."
+  sudo bash -c "cat > $LOKI_CONFIG_FILE <<EOL
+auth_enabled: false
+
+common:
+  path_prefix: $LOKI_INSTALL_DIR/data
+
+server:
+  http_listen_port: 3100
+
+ingester:
+  lifecycler:
+    ring:
+      kvstore:
+        store: inmemory
+      replication_factor: 1
+  chunk_idle_period: 5m
+  chunk_retain_period: 30s
+
+schema_config:
+  configs:
+    - from: 2020-10-24
+      store: boltdb-shipper
+      object_store: filesystem
+      schema: v11
+      index:
+        prefix: index_
+        period: 24h
+
+storage_config:
+  boltdb_shipper:
+    active_index_directory: $LOKI_INSTALL_DIR/data/index
+    cache_location: $LOKI_INSTALL_DIR/data/cache
+    cache_ttl: 24h
+  filesystem:
+    directory: $LOKI_INSTALL_DIR/data/chunks
+
+compactor:
+  working_directory: $LOKI_INSTALL_DIR/data/compactor
+
+limits_config:
+  reject_old_samples: true
+  reject_old_samples_max_age: 168h
+  allow_structured_metadata: false
+
+table_manager:
+  retention_deletes_enabled: false
+  retention_period: 0s
+EOL"
+
+  # Create necessary directories
+  sudo mkdir -p "$LOKI_INSTALL_DIR/data/index"
+  sudo mkdir -p "$LOKI_INSTALL_DIR/data/cache"
+  sudo mkdir -p "$LOKI_INSTALL_DIR/data/chunks"
+  sudo mkdir -p "$LOKI_INSTALL_DIR/data/compactor"
+  sudo chown -R loki:loki "$LOKI_INSTALL_DIR"
+  echo "Loki configuration created at $LOKI_CONFIG_FILE."
+}
+
 # Function to enable MySQL slow query logging if it's not enabled
 enable_mysql_slow_query_log() {
   if command -v mysql &>/dev/null; then
@@ -46,10 +106,10 @@ enable_mysql_slow_query_log() {
       if ! grep -q "^slow_query_log = 1" "$mysql_conf"; then
         echo "Enabling MySQL slow query logging..."
         echo -e "\n[mysqld]\nslow_query_log = 1\nslow_query_log_file = /var/log/mysql/slow.log\nlong_query_time = 1" | sudo tee -a "$mysql_conf" >/dev/null
-        
+
         sudo chown mysql:mysql /var/log/mysql/slow.log
         sudo chmod 664 /var/log/mysql/slow.log
-        
+
         echo "MySQL slow query logging has been enabled."
         sudo systemctl restart mysql
 
@@ -94,6 +154,8 @@ sudo gzip -df "$LOKI_INSTALL_DIR/loki.gz"
 sudo chmod +x "$LOKI_INSTALL_DIR/loki"
 [[ ! -L /usr/local/bin/loki ]] && sudo ln -s "$LOKI_INSTALL_DIR/loki" /usr/local/bin/loki
 
+# Create Loki configuration
+create_loki_config
 # Install Promtail
 echo "Installing Promtail..."
 PROMTAIL_VERSION=$(curl -s "https://api.github.com/repos/grafana/loki/releases/latest" | grep -Po '"tag_name": "v\K[0-9.]+')
@@ -259,6 +321,10 @@ done
 echo "Installation and configuration complete!"
 echo "Loki endpoint: http://localhost:3100"
 echo "Promtail endpoint: http://localhost:9081"
+
+sudo usermod -aG adm promtail
+sudo usermod -aG syslog promtail
+sudo systemctl restart promtail
 
 # Log summary
 echo -e "\nLog sources configured:"

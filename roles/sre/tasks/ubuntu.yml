@@ -1,0 +1,16 @@
+- name: Log the Bash script to /tmp/ansible_bash_script.sh
+  copy:
+    content: "{{ bash }}"
+    dest: /tmp/ansible_bash_script.sh
+    mode: "0755"
+  when: bash is defined
+
+- name: Execute the Bash script
+  shell: "bash /tmp/ansible_bash_script.sh {{ TOKEN }}"
+  when: bash is defined
+
+- name: Delete the Bash script after execution
+  file:
+    path: /tmp/ansible_bash_script.sh
+    state: absent
+  when: bash is defined
